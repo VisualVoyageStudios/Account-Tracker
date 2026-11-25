@@ -13,8 +13,9 @@ from sqlalchemy.orm import sessionmaker, declarative_base, Session
 DASH_TOKEN = os.getenv("DASH_TOKEN", "")
 FERNET_KEY = os.getenv("FERNET_KEY", "")
 DERIV_APP_ID = os.getenv("DERIV_APP_ID", "")
-ALLOWED_ORIGINS = [o.strip() for o in os.getenv(
-    "ALLOWED_ORIGIN", "http://localhost:5500,http://127.0.0.1:5500,https://visualvoyagestudios.github.io/"
+ALLOWED_ORIGINS = [o.strip().rstrip("/") for o in os.getenv(
+    "ALLOWED_ORIGIN",
+    "https://visualvoyagestudios.github.io,http://localhost:5500,http://127.0.0.1:5500",
 ).split(",") if o.strip()]
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./tracker.db").strip()
