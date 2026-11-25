@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Account Tracker</title>
+<style>
+  :root { --bg:#0d0d10; --card:#17171b; --line:#2c2c32; --text:#f0f0f2; --mut:#9a9aa0; --acc:#c8102e; --ok:#16a34a; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 system-ui,sans-serif; }
+  .wrap { max-width:1000px; margin:0 auto; padding:20px; }
+  header { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; }
+  h1 { font-size:1.3rem; margin:0; }
+  button { background:var(--acc); color:#fff; border:0; border-radius:8px; padding:8px 14px; font:inherit; cursor:pointer; }
+  button.ghost { background:transparent; border:1px solid var(--line); color:var(--text); }
+  .total { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:20px; margin:16px 0; }
+  .total b { font-size:2.2rem; display:block; font-variant-numeric:tabular-nums; }
+  .mut { color:var(--mut); font-size:.85rem; }
+  svg { width:100%; height:80px; margin-top:10px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:12px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px; }
+  .card h3 { margin:0; font-size:1rem; } .card .amt { font-size:1.4rem; margin:8px 0 2px; font-variant-numeric:tabular-nums; }
+  .err { color:#ff5a72; font-size:.8rem; } .row { display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; }
+  form { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px; margin:16px 0; display:none; gap:8px; flex-direction:column; }
+  form.open { display:flex; }
+  input, select { background:#0d0d10; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:8px; font:inherit; width:100%; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Account Tracker</h1>
+    <div><button id="refresh">Sync Accounts</button> <button class="ghost" id="add-toggle">+ Add account</button></div>
+  </header>
+
+  <div class="total"><span class="mut">Total equity (USD)</span><b id="total">—</b><span class="mut" id="status"></span><svg id="spark" viewBox="0 0 400 80" preserveAspectRatio="none"></svg></div>
+
+  <form id="add-form">
+    <select id="f-kind">
+      <option value="mt">MT5 (sync agent on your PC: Exness, IFX…)</option>
+      <option value="manual">Manual (Exness, IFX, EasyEquities, other)</option>
+      <option value="deriv">Deriv (live, read-only token)</option>
+      <option value="bybit">Bybit (live, read-only key)</option>
+    </select>
+    <input id="f-broker" placeholder="Broker name (e.g. Exness)" required>
+    <input id="f-label" placeholder="Label (e.g. Standard 1234)" required>
+    <input id="f-currency" placeholder="Currency (USD, ZAR…)" value="USD">
+    <input id="f-rate" type="number" step="any" placeholder="USD per 1 unit (e.g. 0.055 for ZAR; 1 for USD)" value="1">
+    <input id="f-balance" type="number" step="any" placeholder="Balance (manual only)">
+    <input id="f-token" placeholder="Deriv API token (read-only)" hidden>
+    <input id="f-appid" placeholder="Deriv App ID (from developers.deriv.com)" hidden>
+    <input id="f-accid" placeholder="Deriv account ID (optional if you have only one)" hidden>
+    <input id="f-key" placeholder="Bybit API key (read-only)" hidden>
+    <input id="f-secret" type="password" placeholder="Bybit API secret" hidden>
+    <button type="submit">Save account</button>
+  </form>
+
+  <div class="grid" id="grid"></div>
+  <p class="mut">Use read-only API keys only. Educational tool, not financial advice.</p>
+</div>
+
+<script>
+const API = "https://account-tracker-pjon.onrender.com"; // change to your deployed backend URL
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+const money = (n, c = "USD") => new Intl.NumberFormat(undefined, { style:"currency", currency: /^[A-Z]{3}$/.test(c) ? c : "USD" }).format(n || 0);
+
+function token() {
+  let t = localStorage.getItem("dash_token");
+  if (!t) { t = prompt("Enter your dashboard token"); if (t) localStorage.setItem("dash_token", t); }
+  return t;
+}
+async function api(path, opts = {}) {
+  const res = await fetch(API + path, {
+    ...opts,
+    headers: { "Content-Type":"application/json", Authorization:`Bearer ${token()}` },
+  });
+  if (res.status === 401) { localStorage.removeItem("dash_token"); throw new Error("Wrong token — reload and try again."); }
+  if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || "Request failed"); }
+  return res.json();
+}
+
+function spark(points) {
+  const el = $("spark");
+  if (points.length < 2) { el.innerHTML = ""; return; }
+  const vals = points.map((p) => p.total_usd), min = Math.min(...vals), max = Math.max(...vals), span = max - min || 1;
+  const pts = vals.map((v, i) => `${(i / (vals.length - 1)) * 400},${75 - ((v - min) / span) * 70}`).join(" ");
+  el.innerHTML = `<polyline points="${pts}" fill="none" stroke="#c8102e" stroke-width="2" vector-effect="non-scaling-stroke"/>`;
+}
+
+async function load() {
+  const d = await api("/overview");
+  $("total").textContent = money(d.total_usd);
+  spark(d.history);
+  $("grid").innerHTML = d.accounts.map((a) => `
+    <div class="card" data-id="${a.id}">
+      <h3>${esc(a.broker)} <span class="mut">· ${esc(a.label)}</span></h3>
+      <div class="amt">${money(a.equity, a.currency)}</div>
+      <div class="mut">${a.currency !== "USD" ? "≈ " + money(a.equity_usd) + " · " : ""}${a.open_positions} open · ${a.kind === "manual" ? "manual" : a.kind === "mt" ? "MT5 agent" : "live"}</div>
+      <div class="mut">${a.updated_at ? "Updated " + new Date(a.updated_at).toLocaleString() : ""}</div>
+      ${a.error ? `<div class="err">${esc(a.error)}</div>` : ""}
+      <div class="row">
+        ${a.kind === "manual" ? `<button class="ghost" data-act="edit">Update balance</button>` : ""}
+        <button class="ghost" data-act="del">Remove</button>
+      </div>
+    </div>`).join("") || `<p class="mut">No accounts yet — add your first one.</p>`;
+}
+
+$("refresh").onclick = async () => {
+  const btn = $("refresh");
+  btn.disabled = true;
+  $("status").textContent = "Syncing… (first request can take a minute if the server is asleep)";
+  try {
+    const before = await api("/overview");
+    const mtBefore = Object.fromEntries(before.accounts.filter((a) => a.kind === "mt").map((a) => [a.id, a.updated_at]));
+    const hasMt = Object.keys(mtBefore).length > 0;
+
+    await api("/refresh", { method: "POST" });                 // Deriv + Bybit
+    if (hasMt) await api("/sync-request", { method: "POST" }); // asks the MT5 agent
+
+    let waiting = hasMt;
+    for (let i = 0; i < 10 && waiting; i++) {                  // wait up to ~30 s
+      await new Promise((r) => setTimeout(r, 3000));
+      const d = await api("/overview");
+      waiting = d.accounts.some((a) => a.kind === "mt" && a.updated_at === mtBefore[a.id]);
+    }
+    await load();
+    $("status").textContent = waiting
+      ? "MT5 didn't reply. Is the sync agent running and MT5 open?"
+      : "Synced " + new Date().toLocaleTimeString();
+  } catch (e) { $("status").textContent = e.message; }
+  btn.disabled = false;
+};
+
+$("add-toggle").onclick = () => $("add-form").classList.toggle("open");
+$("f-kind").onchange = () => {
+  const k = $("f-kind").value;
+  $("f-token").hidden = k !== "deriv"; $("f-key").hidden = k !== "bybit"; $("f-secret").hidden = k !== "bybit";
+  $("f-balance").hidden = k !== "manual";
+  $("f-appid").hidden = k !== "deriv";
+  $("f-accid").hidden = k !== "deriv";
+};
+$("f-kind").onchange();
+
+$("add-form").onsubmit = async (e) => {
+  e.preventDefault();
+  const kind = $("f-kind").value;
+  const credentials = kind === "deriv" ? Object.fromEntries(Object.entries({
+    token: $("f-token").value.trim(), app_id: $("f-appid").value.trim(), account_id: $("f-accid").value.trim(),
+    }).filter(([, v]) => v))
+    : kind === "bybit" ? { api_key: $("f-key").value.trim(), api_secret: $("f-secret").value.trim() } : {};
+  try {
+    const created = await api("/accounts", { method:"POST", body: JSON.stringify({
+      kind, broker: $("f-broker").value.trim(), label: $("f-label").value.trim(),
+      currency: $("f-currency").value.trim() || "USD", usd_rate: parseFloat($("f-rate").value) || 1,
+      balance: parseFloat($("f-balance").value) || 0, credentials,
+    })});
+    e.target.reset(); $("f-kind").onchange(); e.target.classList.remove("open");
+    if (created.push_key) prompt("Copy this push key into the EA. It is shown only once:", created.push_key);
+    if (kind === "deriv" || kind === "bybit") await api("/refresh", { method:"POST" });
+    load();
+  } catch (err) { alert(err.message); }
+};
+
+$("grid").onclick = async (e) => {
+  const b = e.target.closest("button[data-act]"); if (!b) return;
+  const id = b.closest(".card").dataset.id;
+  try {
+    if (b.dataset.act === "del") { if (confirm("Remove this account?")) await api(`/accounts/${id}`, { method:"DELETE" }); }
+    else { const v = parseFloat(prompt("New balance:")); if (!isNaN(v)) await api(`/accounts/${id}`, { method:"PATCH", body: JSON.stringify({ balance: v }) }); }
+    load();
+  } catch (err) { alert(err.message); }
+};
+
+load().catch((e) => ($("status").textContent = e.message));
+</script>
+</body>
+</html>
